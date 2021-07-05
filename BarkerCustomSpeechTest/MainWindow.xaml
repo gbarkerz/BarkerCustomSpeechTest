@@ -1,0 +1,33 @@
+﻿<Window x:Class="BarkerCustomSpeechTest.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:BarkerCustomSpeechTest"
+        mc:Ignorable="d"
+        Title="Barker Custom Speech Test" Height="450" Width="800">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Use this app to test your Azure custom speech model." />
+
+        <StackPanel Grid.Row="1" Width="400"
+            Orientation="Vertical" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock Text="Click the button below, then speak, and wait for recognized text to appear." />
+            <Button x:Name="SpeakButton" Content="_Speak" Click="SpeakButton_Clicked" 
+                    Margin="0,20,0,10" Padding="4" />
+            <Button Content="_Copy" Click="CopyButton_Click" 
+                    Padding="4" Margin="0,0,0,10"
+                    IsEnabled="{Binding ElementName=RecoSpeechLabel, Path=Text.Length}"/>
+            <TextBlock x:Name="RecoSpeechLabel" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Button Grid.Row="2" 
+            Content="S_ettings" Click="SettingsButton_Clicked" 
+            HorizontalAlignment="Right" Padding="4" />
+    </Grid>
+</Window>
