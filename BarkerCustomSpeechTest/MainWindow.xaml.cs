@@ -14,6 +14,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace BarkerCustomSpeechTest
 {
@@ -25,23 +26,81 @@ namespace BarkerCustomSpeechTest
         public string region = "";
         public bool showConfidenceWithResults = false;
 
+        private bool isListening = false;
+        private SpeechRecognizer recognizer;
+        private DispatcherTimer timeoutTimer;
+        private int timeoutTimerTimeout = 30;
+
         public MainWindow()
         {
             InitializeComponent();
 
+            this.Closed += MainWindow_Closed;
+
+            // Create a timeout timer, so that if there's no speech recognized 
+            // for a long time, give up listening.
+
+            timeoutTimer = new DispatcherTimer();
+            timeoutTimer.Tick += TimeoutTimer_Tick;
+            timeoutTimer.Interval = new TimeSpan(0, 0, timeoutTimerTimeout);
+
             LoadSettings();
+        }
+
+        private void MainWindow_Closed(object sender, EventArgs e)
+        {
+            StopRecognition();
         }
 
         private void SpeakButton_Clicked(object sender, EventArgs e)
         {
-            SpeakButton.IsEnabled = false;
+            if (!isListening)
+            {
+                // We're about to start listening, so kick off the timeout timer
+                // so that we can cancel the listening if there's no speech for 
+                // a long time.
 
-            RecoSpeechLabel.Text = "Speak now...";
+                // The timeout timer is started on the UI thread.
+                timeoutTimer.Start();
 
-            GetSpeechResult();
+                SpeakButton.Content = "_Stop speaking";
+
+                RecoSpeechLabel.Text = "Speak now...";
+
+                isListening = true;
+
+                // Now give of the listening on a background thread.
+                Task.Run(() => {
+                    GetSpeechResult();
+                });
+            }
+            else
+            {
+                // Stop any in-progress listening.
+                StopRecognition();
+            }
         }
 
-        private async void GetSpeechResult()
+        private void StopRecognition()
+        {
+            // Let the recognizer running on the background thread know 
+            // that it should stop listening
+            if (recognizer != null)
+            {
+                recognizer.StopContinuousRecognitionAsync();
+            }
+
+            // We no longer need a timeout timer running.
+            timeoutTimer.Stop();
+
+            // Reverr the UI to its not-listening state.
+            SpeakButton.Content = "_Speak";
+
+            isListening = false;
+        }
+
+        // GetSpeechResult() is running on a background thread.
+        private async Task GetSpeechResult()
         {
             var result = await GetSpeechInputDefault(
                 subscriptionEndpointId,
@@ -49,17 +108,9 @@ namespace BarkerCustomSpeechTest
                 region,
                 showConfidenceWithResults);
 
-            RecoSpeechLabel.Text = result;
-
-            SpeakButton.IsEnabled = true;
-        }
-
-        private void SettingsButton_Clicked(object sender, EventArgs e)
-        {
-            RecoSpeechLabel.Text = "";
-
-            var settingsWindow = new SettingsWindow(this);
-            settingsWindow.Show();
+            // Show any speech recognition results in the UI on the UI thread.
+            Application.Current.Dispatcher.Invoke(
+                new Action(() => { RecoSpeechLabel.Text = result; }));
         }
 
         public async Task<string> GetSpeechInputDefault(
@@ -70,6 +121,7 @@ namespace BarkerCustomSpeechTest
         {
             string speechInput = "";
 
+            // This is all running on a background thread.
             try
             {
                 var config = SpeechConfig.FromSubscription(subscriptionKey, region);
@@ -80,49 +132,50 @@ namespace BarkerCustomSpeechTest
                     config.OutputFormat = OutputFormat.Detailed;
                 }
 
-                using (var recognizer = new SpeechRecognizer(config))
+                recognizer = new SpeechRecognizer(config);
+
+                var stopRecognition = new TaskCompletionSource<int>();
+
+                // We're not interested at the moment in these events.
+                //recognizer.Recognizing += (s, e) =>
+                //{
+                //    Debug.WriteLine("Recognizing.");
+                //};
+
+                //recognizer.Canceled += (s, e) =>
+                //{
+                //    Debug.WriteLine("Canceled.");
+                //};
+
+                recognizer.Recognized += (s, e) =>
                 {
-                    var result = await recognizer.RecognizeOnceAsync().ConfigureAwait(false);
-
-                    // Have we got any recognized speech?
-                    if (result.Reason == ResultReason.RecognizedSpeech)
+                    if (e.Result.Reason == ResultReason.RecognizedSpeech)
                     {
-                        if (showConfidence)
-                        {
-                            double highestConfidence = 0;
+                        Debug.WriteLine("Recognized: " + e.Result.Text);
 
-                            var detailedResults = result.Best();
-                            foreach (var item in detailedResults)
-                            {
-                                if (item.Confidence > highestConfidence)
-                                {
-                                    highestConfidence = item.Confidence;
-
-                                    speechInput = item.Text;
-                                }
-                            }
-
-                            speechInput += "\r\n\r\n(Confidence is " +
-                                (int)(highestConfidence * 100) +
-                                "%)";
-                        }
-                        else
-                        {
-                            speechInput = result.Text;
-                        }
-
-                        Debug.WriteLine("Recognized speech: \" + speechInput + \", Duration: "
-                            + result.Duration);
+                        speechInput += (speechInput.Length == 0 ? "" : " ") + e.Result.Text;
                     }
-                    else
-                    {
-                        speechInput = "Sorry, I couldn't get any text from the speech.\r\n\r\n" +
-                            "Reason: \"" + result.Reason.ToString() + "\"";
+                    // ResultReason.NoMatch only seems to get raised when speech occurs
+                    // after a pause.
+                    //else if (e.Result.Reason == ResultReason.NoMatch)
+                    //{
+                    //    Debug.WriteLine("NoMatch.");
+                    //}
+                };
 
-                        Debug.WriteLine("No recognized speech available. Reco status is: " +
-                            result.Reason.ToString());
-                    }
-                }
+                // This event is raised following the Stop Speaking button being pressed.
+                recognizer.SessionStopped += (s, e) =>
+                {
+                    Debug.WriteLine("Session stopped.");
+
+                    stopRecognition.TrySetResult(0);
+                };
+
+                await recognizer.StartContinuousRecognitionAsync();
+
+                // This returns once the Stop Speaking button's been raised.
+                Task.WaitAny(new[] { 
+                    stopRecognition.Task });
             }
             catch (Exception ex)
             {
@@ -134,6 +187,21 @@ namespace BarkerCustomSpeechTest
             }
 
             return speechInput;
+        }
+
+        private void TimeoutTimer_Tick(object sender, EventArgs e)
+        {
+            StopRecognition();
+        }
+
+        private void SettingsButton_Clicked(object sender, EventArgs e)
+        {
+            StopRecognition();
+
+            RecoSpeechLabel.Text = "";
+
+            var settingsWindow = new SettingsWindow(this);
+            settingsWindow.Show();
         }
 
         private void LoadSettings()
@@ -160,6 +228,8 @@ namespace BarkerCustomSpeechTest
 
         private void CopyButton_Click(object sender, RoutedEventArgs e)
         {
+            StopRecognition();
+
             var recognizedText = RecoSpeechLabel.Text;
             if (!String.IsNullOrWhiteSpace(recognizedText))
             {
