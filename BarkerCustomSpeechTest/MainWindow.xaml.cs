@@ -190,6 +190,9 @@ namespace BarkerCustomSpeechTest
                     "Please check the required details have been supplied through the Settings button.\r\n\r\n" +
                     "Details: \"" + ex.Message + "\"";
 
+                Application.Current.Dispatcher.Invoke(
+                    new Action(() => { RecoSpeechLabel.Text = speechInput; }));
+
                 Debug.WriteLine("Attempt to recognize speech failed. " + ex.Message);
             }
 
